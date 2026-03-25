@@ -3,7 +3,7 @@ import websockets
 import json
 import pandas as pd
 import requests
-from telegram.ext import Application, MessageHandler, filters
+from telegram.ext import Application
 
 # --- CONFIGURACIÓN DE IDENTIDAD ---
 APP_ID = '1089' 
@@ -23,8 +23,10 @@ SIMBOLOS_API = {
     "Step Index": "stpRNG", "BTCUSD": "cryBTCUSD", "ETHUSD": "cryETHUSD"
 }
 
-# Temporalidades para Escaneo y Reporte (Se agregó 1D para tu consulta)
-TFS_SCAN = {"5M": 300, "15M": 900, "30M": 1800, "1H": 3600, "4H": 14400}
+# CAMBIO SOLICITADO: Escaneo solo desde 15M en adelante
+TFS_SCAN = {"15M": 900, "30M": 1800, "1H": 3600, "4H": 14400}
+
+# Se mantiene 1M a 1D para el reporte de confluencia dentro de la señal
 TFS_FULL = {"1M": 60, "5M": 300, "15M": 900, "30M": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
 def enviar_telegram_sync(mensaje):
@@ -50,24 +52,7 @@ async def obtener_tendencia_tf(ws, simbolo_api, tf_v):
     e50 = df_t['close'].ewm(span=50, adjust=False).mean().iloc[-1]
     return "🟢" if e30 > e50 else "🔴"
 
-# --- NUEVA FUNCIÓN: TU COMANDO DE TENDENCIAS ---
-async def atender_mensaje_usuario(update, context):
-    txt = update.message.text.lower()
-    if "tendencias actuales" in txt:
-        await update.message.reply_text("🔎 Analizando todos los mercados (1M a 1D)...")
-        uri = f"wss://ws.binaryws.com/websockets/v3?app_id={APP_ID}"
-        reporte = "📊 *ESTADO ACTUAL DE MERCADOS*\n\n"
-        async with websockets.connect(uri) as ws:
-            for nom, api in SIMBOLOS_API.items():
-                linea = f"*{nom.split()[0]}:* " # Nombre corto
-                for n_tf, v_tf in TFS_FULL.items():
-                    t = await obtener_tendencia_tf(ws, api, v_tf)
-                    linea += f"{n_tf}{t} "
-                reporte += linea + "\n"
-                await asyncio.sleep(0.1)
-        await update.message.reply_text(reporte, parse_mode="Markdown")
-
-# --- TU ESTRATEGIA (SIN CAMBIOS) ---
+# --- ESTRATEGIA INTACTA ---
 async def analizar_estrategia_cruce_pulback_precisa(ws, nombre_simbolo, simbolo_api, tf_n, tf_v):
     global cruces_confirmados_estrategia_2_precisa, senales_enviadas_cruces_precisos
     clave_base = f"{nombre_simbolo}_{tf_n}_pback_pro"
@@ -91,7 +76,7 @@ async def analizar_estrategia_cruce_pulback_precisa(ws, nombre_simbolo, simbolo_
     i_retest = -1
     for i in range(i_cross + 5, len(df)):
         v = df.iloc[i]
-        margen = v['ema30'] * 0.00005 # TU MARGEN MT5
+        margen = v['ema30'] * 0.00005 
         if (dir_cross == "SELL" and v['high'] >= (v['ema30'] - margen)) or (dir_cross == "BUY" and v['low'] <= (v['ema30'] + margen)):
             i_retest = i; break
     if i_retest != -1 and (i_retest >= len(df) - 2):
@@ -120,13 +105,8 @@ async def loop_escaneo():
         except: await asyncio.sleep(5)
 
 async def main():
-    enviar_telegram_sync("🚀 Scanner V7.2 Online\nComando activo: 'tendencias actuales'")
-    # Iniciar escucha de Telegram
-    app = Application.builder().token(TOKEN).build()
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    # Iniciar escaneo automático en paralelo
+    # El bot ya no escucha mensajes, solo anuncia que está activo
+    enviar_telegram_sync("🚀 Scanner V7.3 Online\n🎯 Escaneo activo: 15M, 30M, 1H, 4H")
     await loop_escaneo()
 
 if __name__ == "__main__":
