@@ -123,7 +123,6 @@ async def main():
     enviar_telegram_sync("🚀 Scanner V7.2 Online\nComando activo: 'tendencias actuales'")
     # Iniciar escucha de Telegram
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, atender_mensaje_usuario))
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
