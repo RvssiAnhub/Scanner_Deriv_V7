@@ -1,0 +1,4 @@
+deriv-api
+pandas
+requests
+websockets
