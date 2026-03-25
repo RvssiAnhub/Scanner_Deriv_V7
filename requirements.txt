@@ -1,0 +1,5 @@
+deriv-api
+pandas
+requests
+websockets
+python-telegram-bot
