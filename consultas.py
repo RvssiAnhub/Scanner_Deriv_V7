@@ -8,7 +8,7 @@ from telegram.ext import Application, MessageHandler, filters
 TOKEN = '8717928690:AAHZm1cHhBBXrl3BokW7PXSjvFPrEYJeA-E'
 APP_ID = '1089'
 
-# CATEGORÍAS SEPARADAS PARA MENSAJES INDEPENDIENTES
+# CATEGORÍAS INDEPENDIENTES
 CATEGORIAS = {
     "🚀 *BOOM & CRASH*": {
         "B1000": "BOOM1000", "B500": "BOOM500", "B300": "BOOM300", "B600": "BOOM600", "B900": "BOOM900",
@@ -29,7 +29,7 @@ CATEGORIAS = {
     "🪙 *CRIPTOMONEDAS*": {
         "BTC": "cryBTCUSD", "ETH": "cryETHUSD"
     },
-    "🔱 *METALES (ORO/PLATA)*": {
+    "🔱 *METALES*": {
         "ORO": "frxXAUUSD", "PLATA": "frxXAGUSD"
     },
     "🏛️ *ÍNDICES BURSÁTILES*": {
@@ -51,8 +51,9 @@ async def obtener_tendencia(ws, api_name, seconds):
             e30 = df['close'].ewm(span=30, adjust=False).mean().iloc[-1]
             e50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
             
+            # ACUMULACIÓN (⚪)
             diff = abs(e30 - e50)
-            threshold = e50 * 0.00015 
+            threshold = e50 * 0.00018 
             if diff < threshold: return "⚪"
             return "🟢" if e30 > e50 else "🔴"
     except: pass
@@ -61,37 +62,40 @@ async def obtener_tendencia(ws, api_name, seconds):
 async def responder_tendencias(update, context):
     user_text = update.message.text.lower()
     if "tendencias" in user_text:
-        # Mensaje inicial de carga
-        await update.message.reply_text("⏳ *Generando reportes por categoría...*", parse_mode="Markdown")
+        # 1. Mensaje temporal de aviso
+        aviso = await update.message.reply_text("⏳ *Generando reportes separados...*", parse_mode="Markdown")
         
         uri = f"wss://ws.binaryws.com/websockets/v3?app_id={APP_ID}"
         
         async with websockets.connect(uri) as ws:
             for cat_nombre, activos in CATEGORIAS.items():
-                # Construimos un mensaje separado para cada categoría
-                texto_categoria = f"{cat_nombre}\n"
-                texto_categoria += "`ACTIVO   1M 15M 1H 4H 1D` \n"
-                texto_categoria += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+                # CONSTRUIMOS UN MENSAJE COMPLETAMENTE NUEVO PARA CADA CATEGORÍA
+                texto_bloque = f"{cat_nombre}\n"
+                texto_bloque += "`ACTIVO   1M 15M 1H 4H 1D` \n"
+                texto_bloque += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
                 
                 for nombre, api_code in activos.items():
                     linea = f"`{nombre:7}`"
                     for label, secs in TFS_FULL.items():
                         res = await obtener_tendencia(ws, api_code, secs)
                         linea += f" {res}"
-                    texto_categoria += linea + "\n"
-                    await asyncio.sleep(0.02) # Velocidad ultra rápida
+                    texto_bloque += linea + "\n"
+                    await asyncio.sleep(0.02)
                 
-                # Enviamos el mensaje de esta categoría específica
+                # ENVIAR MENSAJE INDEPENDIENTE
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text=texto_categoria,
+                    text=texto_bloque,
                     parse_mode="Markdown"
                 )
-                # Pequeña pausa entre mensajes para orden de Telegram
-                await asyncio.sleep(0.2)
+                # Pausa para asegurar que Telegram no los junte
+                await asyncio.sleep(0.3)
+
+        # 2. Borramos el aviso de "Cargando" al terminar
+        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=aviso.message_id)
 
 def main():
-    print("🤖 Bot de Consultas Multi-Mensaje iniciado...")
+    print("🤖 Bot de Consultas Multi-Mensaje V3 iniciado...")
     app = Application.builder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder_tendencias))
     app.run_polling()
