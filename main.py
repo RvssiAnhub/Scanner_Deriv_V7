@@ -14,26 +14,33 @@ CHAT_ID = '8236681412'
 senales_enviadas_cruces_precisos = {}
 cruces_confirmados_estrategia_2_precisa = {} 
 
-# --- MERCADOS DERIV API ---
+# --- LISTA MAESTRA DE MERCADOS ---
 SIMBOLOS_API = {
-    "B1000": "BOOM1000", "B500": "BOOM500", "B300": "BOOM300", "B600": "BOOM600", "B900": "BOOM900",
-    "C1000": "CRASH1000", "C500": "CRASH500", "C300": "CRASH300", "C600": "CRASH600", "C900": "CRASH900",
-    "V5": "R_5", "V10": "R_10", "V15": "R_15", "V25": "R_25", "V30": "R_30", "V50": "R_50", "V75": "R_75", "V90": "R_90", "V100": "R_100",
-    "J10": "JD10", "J25": "JD25", "J50": "JD50", "J75": "JD75", "J100": "JD100",
-    "Step": "stpRNG", "S200": "STP200", "S500": "STP500", "M-S2": "MSTEP2", "M-S4": "MSTEP4",
-    "D600-U": "DEX600U", "D600-D": "DEX600D", "D900-U": "DEX900U", "D1500-D": "DEX1500D",
-    "ORO": "frxXAUUSD", "PLATA": "frxXAGUSD", "BTC": "cryBTCUSD", "ETH": "cryETHUSD",
-    "US100": "otcUSTECH", "WS30": "otcWALLST"
+    "Boom 1000 Index": "BOOM1000", "Boom 500 Index": "BOOM500", "Boom 300 Index": "BOOM300", "Boom 600 Index": "BOOM600", "Boom 900 Index": "BOOM900",
+    "Crash 1000 Index": "CRASH1000", "Crash 500 Index": "CRASH500", "Crash 300 Index": "CRASH300", "Crash 600 Index": "CRASH600", "Crash 900 Index": "CRASH900",
+    "Volatility 10 Index": "R_10", "Volatility 25 Index": "R_25", "Volatility 50 Index": "R_50", "Volatility 75 Index": "R_75", "Volatility 100 Index": "R_100",
+    "Volatility 10 (1s) Index": "1HZ10V", "Volatility 25 (1s) Index": "1HZ25V", "Volatility 50 (1s) Index": "1HZ50V", "Volatility 75 (1s) Index": "1HZ75V", "Volatility 100 (1s) Index": "1HZ100V",
+    "Volatility 5 Index": "R_5", "Volatility 15 Index": "R_15", "Volatility 30 Index": "R_30", "Volatility 90 Index": "R_90",
+    "Jump 10 Index": "JD10", "Jump 25 Index": "JD25", "Jump 50 Index": "JD50", "Jump 75 Index": "JD75", "Jump 100 Index": "JD100", 
+    "Step Index": "stpRNG", "Step 200 Index": "STP200", "Step 300 Index": "STP300", "Step 400 Index": "STP400", "Step 500 Index": "STP500",
+    "Multi Step 2 Index": "MSTEP2", "Multi Step 3 Index": "MSTEP3", "Multi Step 4 Index": "MSTEP4",
+    "DEX 600 UP": "DEX600U", "DEX 600 DOWN": "DEX600D", "DEX 900 UP": "DEX900U", "DEX 900 DOWN": "DEX900D", "DEX 1500 UP": "DEX1500U", "DEX 1500 DOWN": "DEX1500D",
+    "XAUUSD (Oro)": "frxXAUUSD", "XAGUSD (Plata)": "frxXAGUSD", "BTCUSD": "cryBTCUSD", "ETHUSD": "cryETHUSD",
+    "US Tech 100": "otcUSTECH", "Wall Street 30": "otcWALLST"
 }
 
-# ESCANEO: Ahora incluimos 5M
+# --- TEMPORALIDADES ---
+# Escaneo de señales activo desde 5M hasta 4H
 TFS_SCAN = {"5M": 300, "15M": 900, "30M": 1800, "1H": 3600, "4H": 14400}
+# Para el reporte de confluencia final
 TFS_FULL = {"1M": 60, "5M": 300, "15M": 900, "30M": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
 def enviar_telegram_sync(mensaje):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    try: requests.post(url, json={"chat_id": CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}, timeout=5)
-    except: pass
+    try: 
+        requests.post(url, json={"chat_id": CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}, timeout=5)
+    except: 
+        pass
 
 async def pedir_velas(ws, simbolo_api, tf_segundos, cantidad):
     req = {"ticks_history": simbolo_api, "count": cantidad, "end": "latest", "style": "candles", "granularity": tf_segundos}
@@ -53,7 +60,7 @@ async def obtener_tendencia_tf(ws, simbolo_api, tf_v):
     e50 = df_t['close'].ewm(span=50, adjust=False).mean().iloc[-1]
     return "🟢" if e30 > e50 else "🔴"
 
-# --- ESTRATEGIA CON ALINEACIÓN OBLIGATORIA ---
+# --- ESTRATEGIA INTACTA + FILTRO DE ALINEACIÓN ---
 async def analizar_estrategia_cruce_pulback_precisa(ws, nombre_simbolo, simbolo_api, tf_n, tf_v):
     global cruces_confirmados_estrategia_2_precisa, senales_enviadas_cruces_precisos
     clave_base = f"{nombre_simbolo}_{tf_n}_pback_pro"
@@ -69,10 +76,10 @@ async def analizar_estrategia_cruce_pulback_precisa(ws, nombre_simbolo, simbolo_
         v, p = df.iloc[i], df.iloc[i-1]
         if (v['ema30'] < v['ema50']) and not (p['ema30'] < p['ema50']): i_cross, dir_cross = i, "SELL"
         elif (v['ema30'] > v['ema50']) and not (p['ema30'] > v['ema50']): i_cross, dir_cross = i, "BUY"
-    
+        
     if i_cross == -1: return
 
-    # FILTRO DE LIMPIEZA PREVIA
+    # Filtro de limpieza previa (80% de 50 velas a favor antes del cruce)
     v_pre = df.iloc[i_cross - 50 : i_cross]
     limpieza = (v_pre['ema30'] > v_pre['ema50']).sum() if dir_cross == "SELL" else (v_pre['ema30'] < v_pre['ema50']).sum()
     if limpieza < 40: return 
@@ -80,10 +87,10 @@ async def analizar_estrategia_cruce_pulback_precisa(ws, nombre_simbolo, simbolo_
     if clave_base not in cruces_confirmados_estrategia_2_precisa or cruces_confirmados_estrategia_2_precisa[clave_base]['index'] != i_cross:
         cruces_confirmados_estrategia_2_precisa[clave_base] = {'index': i_cross, 'direction': dir_cross}
         if clave_base in senales_enviadas_cruces_precisos: del senales_enviadas_cruces_precisos[clave_base]
-    
+        
     if clave_base in senales_enviadas_cruces_precisos: return
 
-    # DETECCIÓN DE PULLBACK (TOQUE EMA 30)
+    # Detección de pullback (retesteo)
     i_retest = -1
     for i in range(i_cross + 5, len(df)):
         v = df.iloc[i]
@@ -93,27 +100,42 @@ async def analizar_estrategia_cruce_pulback_precisa(ws, nombre_simbolo, simbolo_
             
     if i_retest != -1 and (i_retest >= len(df) - 2):
         v_retest = df.iloc[i_retest]
+        
+        # Confirmación de cierre estructural
         if (dir_cross == "SELL" and v_retest['close'] < v_retest['ema50']) or (dir_cross == "BUY" and v_retest['close'] > v_retest['ema50']):
             
-            # --- 🛡️ FILTRO DE ALINEACIÓN 1H Y 4H (NUEVO) ---
+            # Filtro anti-spike
+            if ("Crash" in nombre_simbolo and dir_cross == "BUY") or ("Boom" in nombre_simbolo and dir_cross == "SELL"): return
+            
+            # --- 🛡️ FILTRO ESTRICTO DE ALINEACIÓN (1H y 4H) ---
             t_1h = await obtener_tendencia_tf(ws, simbolo_api, 3600)
             t_4h = await obtener_tendencia_tf(ws, simbolo_api, 14400)
             
             alineado = False
-            if dir_cross == "BUY" and t_1h == "🟢" and t_4h == "🟢": alineado = True
-            elif dir_cross == "SELL" and t_1h == "🔴" and t_4h == "🔴": alineado = True
-            
-            if not alineado: return # Si no hay alineación con los grandes, abortamos señal
-            # ----------------------------------------------
+            if dir_cross == "BUY" and t_1h == "🟢" and t_4h == "🟢":
+                alineado = True
+            elif dir_cross == "SELL" and t_1h == "🔴" and t_4h == "🔴":
+                alineado = True
+                
+            # Si 1H y 4H no coinciden con la dirección, se aborta la señal
+            if not alineado: return 
+            # ----------------------------------------------------
 
-            if ("Crash" in nombre_simbolo and dir_cross == "BUY") or ("Boom" in nombre_simbolo and dir_cross == "SELL"): return
-            
             reporte_total = ""
             for n, val in TFS_FULL.items():
                 tend = await obtener_tendencia_tf(ws, simbolo_api, val)
                 reporte_total += f"• {n}: {tend}\n"
                 
-            msg = (f"🛡️ *SEÑAL ALINEADA (H1+H4)* 🛡️\n\n📊 *Mercado:* `{nombre_simbolo}`\n⏱️ *TF:* {tf_n}\n🎯 *Evento:* Pullback Confirmado\n🔥 *Acción:* {'🔴 VENTA' if dir_cross == 'SELL' else '🔵 COMPRA'}\n\n🌍 *ALINEACIÓN TOTAL:*\n{reporte_total}\n💰 *Precio:* `{round(df.iloc[-1]['close'], 5)}`")
+            # TÍTULO VISUAL ACTUALIZADO
+            msg = (f"🛡️ *SEÑAL ALINEADA (H1+H4)* 🛡️\n\n"
+                   f"📊 *Mercado:* `{nombre_simbolo}`\n"
+                   f"⏱️ *TF:* {tf_n}\n"
+                   f"✅ *Tendencia:* Larga y Limpia\n"
+                   f"🎯 *Evento:* Toque EMA 30\n"
+                   f"🔥 *Acción:* {'🔴 VENTA' if dir_cross == 'SELL' else '🔵 COMPRA'}\n\n"
+                   f"🌍 *CONFLUENCIA:*\n{reporte_total}\n"
+                   f"💰 *Precio:* `{round(df.iloc[-1]['close'], 5)}`")
+            
             enviar_telegram_sync(msg)
             senales_enviadas_cruces_precisos[clave_base] = True
 
@@ -128,10 +150,11 @@ async def loop_escaneo():
                             await analizar_estrategia_cruce_pulback_precisa(ws, nom, api, n_tf, v_tf)
                             await asyncio.sleep(0.3)
                     await asyncio.sleep(15)
-        except: await asyncio.sleep(5)
+        except: 
+            await asyncio.sleep(5)
 
 async def main():
-    enviar_telegram_sync("🚀 Scanner V8.0 Online\n🛡️ Filtro activo: Señales alineadas con 1H y 4H")
+    enviar_telegram_sync("🚀 Scanner V8.2 Online\n🛡️ Filtro estricto: Señales alineadas con 1H y 4H (Incluye escaneo en 5M)")
     await loop_escaneo()
 
 if __name__ == "__main__":
