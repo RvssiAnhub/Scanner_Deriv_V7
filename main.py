@@ -26,17 +26,15 @@ MERCADOS = {
 
 EMA_R = 30  # Blanca
 EMA_L = 50  # Azul
-# AHORA SÍ ESCANEA DE 5M A 4H
-TFS = ["5", "15", "30", "60", "240"] 
+TFS = ["5", "15", "30", "60", "240"] # Escaneo operativo (M5 a H4)
 registros_alertas = {}
 
 # =============================================================
-# 2. MOTOR DE DATOS
+# 2. MOTOR DE DATOS (ACTUALIZADO PARA 1M Y 1D)
 # =============================================================
-def obtener_datos(simbolo, tf):
-    # Traducción exacta de minutos a segundos para Deriv
-    segundos = {"5": 300, "15": 900, "30": 1800, "60": 3600, "240": 14400}.get(tf)
-    req = {"ticks_history": simbolo, "count": 80, "end": "latest", "style": "candles", "granularity": segundos}
+def obtener_datos(simbolo, tf, count=80):
+    segundos = {"1": 60, "5": 300, "15": 900, "30": 1800, "60": 3600, "240": 14400, "1440": 86400}.get(str(tf))
+    req = {"ticks_history": simbolo, "count": count, "end": "latest", "style": "candles", "granularity": segundos}
     try:
         ws = websocket.create_connection("wss://ws.binaryws.com/websockets/v3?app_id=1089", timeout=10)
         ws.send(json.dumps(req))
@@ -50,7 +48,31 @@ def obtener_datos(simbolo, tf):
     except: return None
 
 # =============================================================
-# 3. LÓGICA V7.7: CRUCE SEGURO + PULLBACK
+# 3. GENERADOR DE RESUMEN DE TENDENCIAS MACRO
+# =============================================================
+def obtener_tendencias_macro(id_deriv):
+    tfs_macro = {"1M": "1", "5M": "5", "15M": "15", "1H": "60", "1D": "1440"}
+    resumen = []
+    
+    for nombre, tf in tfs_macro.items():
+        df = obtener_datos(id_deriv, tf, count=60)
+        if df is not None and len(df) >= 55:
+            df.ta.ema(length=EMA_R, append=True)
+            df.ta.ema(length=EMA_L, append=True)
+            actual = df.iloc[-1]
+            
+            # 🟢 Alcista si EMA 30 > EMA 50 | 🔴 Bajista si EMA 30 < EMA 50
+            if actual[f"EMA_{EMA_R}"] > actual[f"EMA_{EMA_L}"]:
+                resumen.append(f"{nombre}: 🟢")
+            else:
+                resumen.append(f"{nombre}: 🔴")
+        else:
+            resumen.append(f"{nombre}: ⚪")
+            
+    return " | ".join(resumen)
+
+# =============================================================
+# 4. LÓGICA V7.8: GATILLO INMEDIATO AL TOQUE
 # =============================================================
 def analizar_mercado(nombre, id_deriv, tf):
     df = obtener_datos(id_deriv, tf)
@@ -68,43 +90,42 @@ def analizar_mercado(nombre, id_deriv, tf):
 
     señal = None
 
-    # COMPRA: Cruce alcista + Toque + Cierre FIRME por encima de la EMA 30
-    if previa[c_r] <= previa[c_l] and actual[c_r] > actual[c_l]:
-        if actual['low'] <= actual[c_r] and actual['close'] > actual[c_r]:
-            # Evita señales falsas si la vela es roja y cierra débil
-            if actual['close'] > actual['open']: 
-                señal = "🟢 COMPRA"
+    # 🟢 COMPRA: Hubo cruce alcista reciente Y el precio actual tocó/cruzó la EMA 30 hacia abajo
+    if (previa[c_r] <= previa[c_l] and actual[c_r] > actual[c_l]) or (df.iloc[-3][c_r] <= df.iloc[-3][c_l] and actual[c_r] > actual[c_l]):
+        if actual['low'] <= actual[c_r]: # GATILLO: Apenas la mecha o el cuerpo toca la EMA 30
+            señal = "🟢 COMPRA"
 
-    # VENTA: Cruce bajista + Toque + Cierre FIRME por debajo de la EMA 30
-    elif previa[c_r] >= previa[c_l] and actual[c_r] < actual[c_l]:
-        if actual['high'] >= actual[c_r] and actual['close'] < actual[c_r]:
-            # Evita señales falsas si la vela es verde y cierra débil
-            if actual['close'] < actual['open']: 
-                señal = "🔴 VENTA"
+    # 🔴 VENTA: Hubo cruce bajista reciente Y el precio actual tocó/cruzó la EMA 30 hacia arriba
+    elif (previa[c_r] >= previa[c_l] and actual[c_r] < actual[c_l]) or (df.iloc[-3][c_r] >= df.iloc[-3][c_l] and actual[c_r] < actual[c_l]):
+        if actual['high'] >= actual[c_r]: # GATILLO: Apenas la mecha o el cuerpo toca la EMA 30
+            señal = "🔴 VENTA"
 
     if señal:
         registros_alertas[alerta_id] = True
         
-        # Etiqueta visual para la temporalidad
+        # Obtenemos el mapa macro solo cuando hay señal para no saturar la API
+        resumen_tendencias = obtener_tendencias_macro(id_deriv)
         tf_label = f"M{tf}" if int(tf) < 60 else (f"H1" if tf == "60" else "H4")
         
-        # MENSAJE CON FORMATO PROFESIONAL
-        msg = (f"⚡ **NUEVA SEÑAL DETECTADA** ⚡\n\n"
+        msg = (f"⚡ **SEÑAL V7.8 (TOQUE INMEDIATO)** ⚡\n\n"
                f"🌐 **Mercado:** `{nombre}`\n"
                f"🎯 **Acción:** **{señal}**\n"
-               f"⏱️ **Temporalidad de la Señal:** `{tf_label}`\n"
-               f"📍 **Nivel de Entrada (EMA 30):** `{round(actual[c_r], 5)}`\n"
+               f"⏱️ **TF Señal:** `{tf_label}`\n"
+               f"📍 **Entrada (Toque EMA 30):** `{round(actual[c_r], 5)}`\n"
                f"───────────────────\n"
-               f"📊 _Rango de escaneo activo:_ `[M5 - M15 - M30 - H1 - H4]`")
+               f"📊 **Resumen de Tendencias (EMA 30 vs 50):**\n"
+               f"`{resumen_tendencias}`\n"
+               f"───────────────────\n"
+               f"⚠️ _Evaluación manual requerida._")
         bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
 
 # =============================================================
-# 4. BUCLE DE ESCANEO
+# 5. BUCLE DE ESCANEO
 # =============================================================
 def main():
-    print("🚀 Bot V7.7 - Iniciado")
+    print("🚀 Bot V7.8 - Iniciado (Gatillo al toque + Macro)")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot V7.7 Operativo**\nEscaner de 5M a 4H activado.\n_Buscando cruces de tendencia..._", parse_mode="Markdown")
+        bot.send_message(CHAT_ID, "✅ **Bot V7.8 Operativo**\nModo: Francotirador (Alerta inmediata al toque de EMA 30).\n_Incluye mapa de tendencias 1M-1D._", parse_mode="Markdown")
     except: pass
 
     while True:
@@ -112,7 +133,7 @@ def main():
             for tf in TFS:
                 analizar_mercado(nombre, sid, tf)
                 time.sleep(0.3)
-        time.sleep(30)
+        time.sleep(25) # Escaneo rápido
 
 if __name__ == "__main__":
     main()
