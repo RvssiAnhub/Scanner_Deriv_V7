@@ -8,7 +8,7 @@ import telebot
 from datetime import datetime
 
 # =============================================================
-# 1. CREDENCIALES (VERIFICADAS)
+# 1. CREDENCIALES Y CONFIGURACIÓN
 # =============================================================
 TOKEN = "8717928690:AAHZm1cHhBBXrl3BokW7PXSjvFPrEYJeA-E"
 CHAT_ID = "8236681412"
@@ -26,85 +26,84 @@ MERCADOS = {
 
 EMA_R = 30  # Blanca
 EMA_L = 50  # Azul
-VELAS_PARALELAS = 8 
 TFS = ["5", "15", "60"]
 registros_alertas = {}
 
 # =============================================================
-# 2. MOTOR DE DATOS Y ESTRATEGIA
+# 2. MOTOR DE DATOS
 # =============================================================
-def obtener_datos_deriv(simbolo, tf, count=100):
+def obtener_datos(simbolo, tf):
     segundos = {"5": 300, "15": 900, "60": 3600}.get(tf)
-    req = {"ticks_history": simbolo, "count": count, "end": "latest", "style": "candles", "granularity": segundos}
+    req = {"ticks_history": simbolo, "count": 100, "end": "latest", "style": "candles", "granularity": segundos}
     try:
         ws = websocket.create_connection("wss://ws.binaryws.com/websockets/v3?app_id=1089", timeout=10)
         ws.send(json.dumps(req))
-        resultado = json.loads(ws.recv())
+        res = json.loads(ws.recv())
         ws.close()
-        if "candles" in resultado:
-            df = pd.DataFrame(resultado["candles"])
+        if "candles" in res:
+            df = pd.DataFrame(res["candles"])
             df['time'] = pd.to_datetime(df['epoch'], unit='s')
             for col in ['open', 'high', 'low', 'close']: df[col] = df[col].astype(float)
             return df
     except: return None
 
-def analizar(nombre, id_deriv, tf):
-    df = obtener_datos_deriv(id_deriv, tf)
-    if df is None or len(df) < 60: return
+# =============================================================
+# 3. LÓGICA V7.6: CRUCE + TOQUE (SIN FILTRO DE VELAS PREVIAS)
+# =============================================================
+def analizar_v76(nombre, id_deriv, tf):
+    df = obtener_datos(id_deriv, tf)
+    if df is None or len(df) < 55: return
 
     df.ta.ema(length=EMA_R, append=True)
     df.ta.ema(length=EMA_L, append=True)
     
-    col_r, col_l = f"EMA_{EMA_R}", f"EMA_{EMA_L}"
+    c_r, c_l = f"EMA_{EMA_R}", f"EMA_{EMA_L}"
     actual = df.iloc[-1]
+    previa = df.iloc[-2]
     
-    # Evitar repeticiones
     alerta_id = f"{id_deriv}_{tf}_{actual['time']}"
     if alerta_id in registros_alertas: return
 
-    # Lógica de Paralelismo (8 velas previas)
-    ventana = df.iloc[-(VELAS_PARALELAS + 2) : -2]
-    bajista_limpia = (ventana[col_r] < ventana[col_l]).all()
-    alcista_limpia = (ventana[col_r] > ventana[col_l]).all()
-
     señal = None
-    # COMPRA: Venía bajista -> Cruza arriba -> Toca EMA 30
-    if bajista_limpia and actual[col_r] > actual[col_l]:
-        if actual['low'] <= actual[col_r] and actual['close'] > actual[col_r]:
-            señal = "🔵 COMPRA (Setup V7.5)"
 
-    # VENTA: Venía alcista -> Cruza abajo -> Toca EMA 30
-    elif alcista_limpia and actual[col_r] < actual[col_l]:
-        if actual['high'] >= actual[col_r] and actual['close'] < actual[col_r]:
-            señal = "🔴 VENTA (Setup V7.5)"
+    # ESTRATEGIA: Cruce de las 2 EMAs + Toque del precio a la EMA 30
+    
+    # 🔵 POSIBLE COMPRA: Cruce alcista (Blanca cruza arriba de Azul)
+    if previa[c_r] <= previa[c_l] and actual[c_r] > actual[c_l]:
+        # El precio debe tocar o estar cerca de la EMA 30 (Pullback)
+        if actual['low'] <= actual[c_r]:
+            señal = "🔵 COMPRA (Cruce V7.6)"
+
+    # 🔴 POSIBLE VENTA: Cruce bajista (Blanca cruza abajo de Azul)
+    elif previa[c_r] >= previa[c_l] and actual[c_r] < actual[c_l]:
+        # El precio debe tocar o estar cerca de la EMA 30 (Pullback)
+        if actual['high'] >= actual[c_r]:
+            señal = "🔴 VENTA (Cruce V7.6)"
 
     if señal:
         registros_alertas[alerta_id] = True
-        msg = (f"🎯 **SEÑAL V7.5.1 DETECTADA**\n\n"
-               f"📈 Mercado: `{nombre}`\n"
-               f"⏰ TF: `M{tf}`\n"
-               f"⚡ Acción: **{señal}**\n"
-               f"📍 Punto de Entrada: `{round(actual[col_r], 5)}`")
+        msg = (f"⚡ **SEÑAL V7.6 DETECTADA**\n\n"
+               f"Mercado: `{nombre}` | TF: `M{tf}`\n"
+               f"Acción: **{señal}**\n"
+               f"Precio EMA 30: `{round(actual[c_r], 5)}`")
         bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
 
 # =============================================================
-# 3. BUCLE PRINCIPAL (CON MENSAJE DE ARRANQUE)
+# 4. BUCLE DE ESCANEO
 # =============================================================
 def main():
-    print("🚀 Iniciando Bot V7.5.1...")
+    print("🚀 Bot V7.6 Cruce Dinámico - Iniciado")
     try:
-        # MENSAJE DE CONFIRMACIÓN INMEDIATA
-        bot.send_message(CHAT_ID, "✅ **Bot V7.5.1 Operativo**\nEstrategia: 8 Velas Paralelas + Toque EMA 30.\n_Escaneando mercados en tiempo real..._", parse_mode="Markdown")
-    except Exception as e:
-        print(f"Error al enviar mensaje inicial: {e}")
+        bot.send_message(CHAT_ID, "✅ **Bot V7.6 Activo**\nLógica: Cruce Directo de EMAs + Pullback.\n_Escaneando mercados..._", parse_mode="Markdown")
+    except: pass
 
     while True:
         for nombre, sid in MERCADOS.items():
             for tf in TFS:
-                analizar(nombre, sid, tf)
-                time.sleep(0.4) 
-        print(f"Ronda completada a las {datetime.now().strftime('%H:%M:%S')}. Todo OK.")
-        time.sleep(60)
+                analizar_v76(nombre, sid, tf)
+                time.sleep(0.3)
+        print(f"Ciclo completado: {datetime.now().strftime('%H:%M:%S')}")
+        time.sleep(30) # Reducimos descanso a 30 segundos para más rapidez
 
 if __name__ == "__main__":
     main()
