@@ -14,19 +14,35 @@ CHAT_ID = '8236681412'
 senales_enviadas_cruces_precisos = {}
 cruces_confirmados_estrategia_2_precisa = {} 
 
+# --- ACTUALIZACIÓN DE MERCADOS (DERIV API) ---
 SIMBOLOS_API = {
-    "Boom 1000 Index": "BOOM1000", "Boom 500 Index": "BOOM500", "Boom 300 Index": "BOOM300",
-    "Crash 1000 Index": "CRASH1000", "Crash 500 Index": "CRASH500", "Crash 300 Index": "CRASH300",
-    "Volatility 10 Index": "R_10", "Volatility 25 Index": "R_25", "Volatility 50 Index": "R_50", "Volatility 75 Index": "R_75", "Volatility 100 Index": "R_100",
-    "Volatility 10 (1s) Index": "1HZ10V", "Volatility 25 (1s) Index": "1HZ25V", "Volatility 50 (1s) Index": "1HZ50V", "Volatility 75 (1s) Index": "1HZ75V", "Volatility 100 (1s) Index": "1HZ100V",
-    "Jump 10 Index": "JD10", "Jump 25 Index": "JD25", "Jump 50 Index": "JD50", "Jump 75 Index": "JD75", "Jump 100 Index": "JD100", 
-    "Step Index": "stpRNG", "BTCUSD": "cryBTCUSD", "ETHUSD": "cryETHUSD"
+    # Boom & Crash
+    "Boom 300 Index": "BOOM300", "Boom 500 Index": "BOOM500", "Boom 600 Index": "BOOM600", "Boom 900 Index": "BOOM900", "Boom 1000 Index": "BOOM1000",
+    "Crash 300 Index": "CRASH300", "Crash 500 Index": "CRASH500", "Crash 600 Index": "CRASH600", "Crash 900 Index": "CRASH900", "Crash 1000 Index": "CRASH1000",
+    
+    # Volatility Indices
+    "Volatility 5 Index": "R_5", "Volatility 10 Index": "R_10", "Volatility 15 Index": "R_15", "Volatility 25 Index": "R_25", 
+    "Volatility 30 Index": "R_30", "Volatility 50 Index": "R_50", "Volatility 75 Index": "R_75", "Volatility 90 Index": "R_90", "Volatility 100 Index": "R_100",
+    
+    # Jump Indices
+    "Jump 10 Index": "JD10", "Jump 25 Index": "JD25", "Jump 50 Index": "JD50", "Jump 75 Index": "JD75", "Jump 100 Index": "JD100",
+    
+    # Step & Multi Step
+    "Step Index": "stpRNG", "Step 200 Index": "STP200", "Step 300 Index": "STP300", "Step 400 Index": "STP400", "Step 500 Index": "STP500",
+    "Multi Step 2 Index": "MSTEP2", "Multi Step 3 Index": "MSTEP3", "Multi Step 4 Index": "MSTEP4",
+    
+    # DEX Indices
+    "DEX 600 UP": "DEX600U", "DEX 600 DOWN": "DEX600D", "DEX 900 UP": "DEX900U", "DEX 900 DOWN": "DEX900D", "DEX 1500 UP": "DEX1500U", "DEX 1500 DOWN": "DEX1500D",
+    
+    # Globales, Metales y Cripto
+    "XAUUSD": "frxXAUUSD", "XAGUSD": "frxXAGUSD", "BTCUSD": "cryBTCUSD", "ETHUSD": "cryETHUSD",
+    "US Tech 100": "otcUSTECH", "Wall Street 30": "otcWALLST"
 }
 
-# CAMBIO SOLICITADO: Escaneo solo desde 15M en adelante
+# Escaneo desde 15M en adelante
 TFS_SCAN = {"15M": 900, "30M": 1800, "1H": 3600, "4H": 14400}
 
-# Se mantiene 1M a 1D para el reporte de confluencia dentro de la señal
+# Reporte de confluencia
 TFS_FULL = {"1M": 60, "5M": 300, "15M": 900, "30M": 1800, "1H": 3600, "4H": 14400, "1D": 86400}
 
 def enviar_telegram_sync(mensaje):
@@ -68,7 +84,7 @@ async def analizar_estrategia_cruce_pulback_precisa(ws, nombre_simbolo, simbolo_
     if i_cross == -1: return
     v_pre = df.iloc[i_cross - 50 : i_cross]
     limpieza = (v_pre['ema30'] > v_pre['ema50']).sum() if dir_cross == "SELL" else (v_pre['ema30'] < v_pre['ema50']).sum()
-    if limpieza < 40: return # 80% DE 50 VELAS
+    if limpieza < 40: return 
     if clave_base not in cruces_confirmados_estrategia_2_precisa or cruces_confirmados_estrategia_2_precisa[clave_base]['index'] != i_cross:
         cruces_confirmados_estrategia_2_precisa[clave_base] = {'index': i_cross, 'direction': dir_cross}
         if clave_base in senales_enviadas_cruces_precisos: del senales_enviadas_cruces_precisos[clave_base]
@@ -87,7 +103,7 @@ async def analizar_estrategia_cruce_pulback_precisa(ws, nombre_simbolo, simbolo_
             for n, val in TFS_FULL.items():
                 tend = await obtener_tendencia_tf(ws, simbolo_api, val)
                 reporte_total += f"• {n}: {tend}\n"
-            msg = (f"💎 *PULLBACK ULTRA-PRECISO* 💎\n\n📊 *Mercado:* `{nombre_simbolo}`\n⏱️ *TF:* {tf_n}\n🚫 *Tendencia:* Larga y Limpia ✅\n🎯 *Evento:* Toque EMA 30\n🔥 *Acción:* {'🔴 VENTA' if dir_cross == 'SELL' else '🔵 COMPRA'}\n\n🌍 *CONFLUENCIA:*\n{reporte_total}\n💰 *Precio:* `{round(df.iloc[-1]['close'], 5)}`")
+            msg = (f"💎 *PULLBACK ULTRA-PRECISO* 💎\n\n📊 *Mercado:* `{nombre_simbolo}`\n⏱️ *TF:* {tf_n}\n🎯 *Evento:* Toque EMA 30\n🔥 *Acción:* {'🔴 VENTA' if dir_cross == 'SELL' else '🔵 COMPRA'}\n\n🌍 *CONFLUENCIA:*\n{reporte_total}\n💰 *Precio:* `{round(df.iloc[-1]['close'], 5)}`")
             enviar_telegram_sync(msg)
             senales_enviadas_cruces_precisos[clave_base] = True
 
@@ -105,8 +121,7 @@ async def loop_escaneo():
         except: await asyncio.sleep(5)
 
 async def main():
-    # El bot ya no escucha mensajes, solo anuncia que está activo
-    enviar_telegram_sync("🚀 Scanner V7.3 Online\n🎯 Escaneo activo: 15M, 30M, 1H, 4H")
+    enviar_telegram_sync("🚀 Scanner V7.4 Online\n🎯 Escaneando todos los mercados de Deriv (Boom, Crash, Step, Vol, Jump, DEX, Metales y Cripto)")
     await loop_escaneo()
 
 if __name__ == "__main__":
