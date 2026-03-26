@@ -8,7 +8,7 @@ import telebot
 from datetime import datetime
 
 # =============================================================
-# 1. CREDENCIALES Y CONFIGURACIÓN
+# 1. CREDENCIALES
 # =============================================================
 TOKEN = "8717928690:AAHZm1cHhBBXrl3BokW7PXSjvFPrEYJeA-E"
 CHAT_ID = "8236681412"
@@ -26,15 +26,17 @@ MERCADOS = {
 
 EMA_R = 30  # Blanca
 EMA_L = 50  # Azul
-TFS = ["5", "15", "60"]
+# AHORA SÍ ESCANEA DE 5M A 4H
+TFS = ["5", "15", "30", "60", "240"] 
 registros_alertas = {}
 
 # =============================================================
 # 2. MOTOR DE DATOS
 # =============================================================
 def obtener_datos(simbolo, tf):
-    segundos = {"5": 300, "15": 900, "60": 3600}.get(tf)
-    req = {"ticks_history": simbolo, "count": 100, "end": "latest", "style": "candles", "granularity": segundos}
+    # Traducción exacta de minutos a segundos para Deriv
+    segundos = {"5": 300, "15": 900, "30": 1800, "60": 3600, "240": 14400}.get(tf)
+    req = {"ticks_history": simbolo, "count": 80, "end": "latest", "style": "candles", "granularity": segundos}
     try:
         ws = websocket.create_connection("wss://ws.binaryws.com/websockets/v3?app_id=1089", timeout=10)
         ws.send(json.dumps(req))
@@ -48,9 +50,9 @@ def obtener_datos(simbolo, tf):
     except: return None
 
 # =============================================================
-# 3. LÓGICA V7.6: CRUCE + TOQUE (SIN FILTRO DE VELAS PREVIAS)
+# 3. LÓGICA V7.7: CRUCE SEGURO + PULLBACK
 # =============================================================
-def analizar_v76(nombre, id_deriv, tf):
+def analizar_mercado(nombre, id_deriv, tf):
     df = obtener_datos(id_deriv, tf)
     if df is None or len(df) < 55: return
 
@@ -66,44 +68,51 @@ def analizar_v76(nombre, id_deriv, tf):
 
     señal = None
 
-    # ESTRATEGIA: Cruce de las 2 EMAs + Toque del precio a la EMA 30
-    
-    # 🔵 POSIBLE COMPRA: Cruce alcista (Blanca cruza arriba de Azul)
+    # COMPRA: Cruce alcista + Toque + Cierre FIRME por encima de la EMA 30
     if previa[c_r] <= previa[c_l] and actual[c_r] > actual[c_l]:
-        # El precio debe tocar o estar cerca de la EMA 30 (Pullback)
-        if actual['low'] <= actual[c_r]:
-            señal = "🔵 COMPRA (Cruce V7.6)"
+        if actual['low'] <= actual[c_r] and actual['close'] > actual[c_r]:
+            # Evita señales falsas si la vela es roja y cierra débil
+            if actual['close'] > actual['open']: 
+                señal = "🟢 COMPRA"
 
-    # 🔴 POSIBLE VENTA: Cruce bajista (Blanca cruza abajo de Azul)
+    # VENTA: Cruce bajista + Toque + Cierre FIRME por debajo de la EMA 30
     elif previa[c_r] >= previa[c_l] and actual[c_r] < actual[c_l]:
-        # El precio debe tocar o estar cerca de la EMA 30 (Pullback)
-        if actual['high'] >= actual[c_r]:
-            señal = "🔴 VENTA (Cruce V7.6)"
+        if actual['high'] >= actual[c_r] and actual['close'] < actual[c_r]:
+            # Evita señales falsas si la vela es verde y cierra débil
+            if actual['close'] < actual['open']: 
+                señal = "🔴 VENTA"
 
     if señal:
         registros_alertas[alerta_id] = True
-        msg = (f"⚡ **SEÑAL V7.6 DETECTADA**\n\n"
-               f"Mercado: `{nombre}` | TF: `M{tf}`\n"
-               f"Acción: **{señal}**\n"
-               f"Precio EMA 30: `{round(actual[c_r], 5)}`")
+        
+        # Etiqueta visual para la temporalidad
+        tf_label = f"M{tf}" if int(tf) < 60 else (f"H1" if tf == "60" else "H4")
+        
+        # MENSAJE CON FORMATO PROFESIONAL
+        msg = (f"⚡ **NUEVA SEÑAL DETECTADA** ⚡\n\n"
+               f"🌐 **Mercado:** `{nombre}`\n"
+               f"🎯 **Acción:** **{señal}**\n"
+               f"⏱️ **Temporalidad de la Señal:** `{tf_label}`\n"
+               f"📍 **Nivel de Entrada (EMA 30):** `{round(actual[c_r], 5)}`\n"
+               f"───────────────────\n"
+               f"📊 _Rango de escaneo activo:_ `[M5 - M15 - M30 - H1 - H4]`")
         bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
 
 # =============================================================
 # 4. BUCLE DE ESCANEO
 # =============================================================
 def main():
-    print("🚀 Bot V7.6 Cruce Dinámico - Iniciado")
+    print("🚀 Bot V7.7 - Iniciado")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot V7.6 Activo**\nLógica: Cruce Directo de EMAs + Pullback.\n_Escaneando mercados..._", parse_mode="Markdown")
+        bot.send_message(CHAT_ID, "✅ **Bot V7.7 Operativo**\nEscaner de 5M a 4H activado.\n_Buscando cruces de tendencia..._", parse_mode="Markdown")
     except: pass
 
     while True:
         for nombre, sid in MERCADOS.items():
             for tf in TFS:
-                analizar_v76(nombre, sid, tf)
+                analizar_mercado(nombre, sid, tf)
                 time.sleep(0.3)
-        print(f"Ciclo completado: {datetime.now().strftime('%H:%M:%S')}")
-        time.sleep(30) # Reducimos descanso a 30 segundos para más rapidez
+        time.sleep(30)
 
 if __name__ == "__main__":
     main()
