@@ -1,4 +1,4 @@
-websockets
 pandas
-requests
-python-telegram-bot
+pandas_ta
+websocket-client
+pyTelegramBotAPI
