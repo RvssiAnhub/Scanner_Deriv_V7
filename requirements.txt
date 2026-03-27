@@ -2,6 +2,5 @@ websockets
 pandas
 pandas_ta
 requests
-python-telegram-bot
 matplotlib
 mplfinance
