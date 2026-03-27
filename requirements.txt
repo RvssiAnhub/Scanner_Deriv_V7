@@ -2,5 +2,3 @@ websockets
 pandas
 pandas_ta
 requests
-matplotlib
-mplfinance
