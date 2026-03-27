@@ -4,7 +4,6 @@ import json
 import pandas as pd
 import requests
 from telegram.ext import Application
-import time
 from datetime import datetime
 
 # --- CONFIGURACIÓN DE IDENTIDAD ---
@@ -12,11 +11,9 @@ TOKEN = '8717928690:AAHZm1cHhBBXrl3BokW7PXSjvFPrEYJeA-E'
 CHAT_ID = '8236681412'
 APP_ID = '1089'
 
-# Diccionario de Estados (Memoria de pullbacks para el 3er toque)
-estado_toques = {} 
 alertas_enviadas = {}
 
-# --- LISTADO EXPANDIDO DE MERCADOS (DERIV COMPLETO) ---
+# --- LISTADO EXPANDIDO DE MERCADOS ---
 SIMBOLOS_API = {
     "Boom 1000": "BOOM1000", "Boom 900": "BOOM900", "Boom 600": "BOOM600", "Boom 500": "BOOM500", "Boom 300": "BOOM300",
     "Crash 1000": "CRASH1000", "Crash 900": "CRASH900", "Crash 600": "CRASH600", "Crash 500": "CRASH500", "Crash 300": "CRASH300",
@@ -29,8 +26,8 @@ SIMBOLOS_API = {
     "US Tech 100": "OTC_US100", "Wall Street 30": "OTC_US30"
 }
 
-TFS_SCAN = {"5M": 300, "15M": 900, "30M": 1800, "1H": 3600, "4H": 14400}
-TFS_REPORTE = {"1M": 60, "5M": 300, "15M": 900, "30M": 1800, "1H": 3600, "4H": 14400}
+# --- TEMPORALIDADES ESTRICTAS (1H, 4H, 1D) ---
+TFS_SCAN = {"1H": 3600, "4H": 14400, "1D": 86400}
 
 def enviar_telegram(msg):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -50,87 +47,109 @@ async def pedir_velas(ws, api_id, tf_sec, count=300):
 
 async def obtener_mapa_confluencia(ws, api_id):
     mapa = ""
-    for n, v in TFS_REPORTE.items():
-        df = await pedir_velas(ws, api_id, v, 120)
+    for n, v in TFS_SCAN.items():
+        df = await pedir_velas(ws, api_id, v, 150)
         if df is not None:
             e30 = df['close'].ewm(span=30, adjust=False).mean().iloc[-1]
             e50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
             e100 = df['close'].ewm(span=100, adjust=False).mean().iloc[-1]
-            if e30 > e50 > e100: mapa += f"• {n}: 🟢\n"
-            elif e30 < e50 < e100: mapa += f"• {n}: 🔴\n"
-            else: mapa += f"• {n}: ⚪\n"
+            if e30 > e50 > e100: mapa += f"• {n}: 🟢 Abanico Alcista\n"
+            elif e30 < e50 < e100: mapa += f"• {n}: 🔴 Abanico Bajista\n"
+            else: mapa += f"• {n}: ⚪ Sin Tendencia Clara\n"
     return mapa
 
 async def analizar_estrategia(ws, nombre, api_id, tf_n, tf_v):
-    global estado_toques, alertas_enviadas
+    global alertas_enviadas
     clave = f"{nombre}_{tf_n}"
     
-    df = await pedir_velas(ws, api_id, tf_v, 400)
-    if df is None or len(df) < 350: return
+    # Pedimos 150 velas (suficiente para ver la tendencia macro en 1H/4H/1D)
+    df = await pedir_velas(ws, api_id, tf_v, 150)
+    if df is None or len(df) < 120: return
 
-    # Cálculo de EMAs
+    # Cálculo exacto de EMAs
     df['ema30'] = df['close'].ewm(span=30, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     df['ema100'] = df['close'].ewm(span=100, adjust=False).mean()
     
     actual = df.iloc[-1]
-    previas = df.iloc[-60:-1] # Historial reciente para validar los 2 toques previos
-
-    # --- REGLA 4: ALINEACIÓN PERFECTA ---
-    tipo_tendencia = None
-    if actual['close'] > actual['ema30'] > actual['ema50'] > actual['ema100']: tipo_tendencia = "BUY"
-    elif actual['close'] < actual['ema30'] < actual['ema50'] < actual['ema100']: tipo_tendencia = "SELL"
     
-    if not tipo_tendencia:
-        estado_toques[clave] = 0 # Reset si se pierde la alineación
-        return
+    # 1. IDENTIFICAR ABANICO Y TENDENCIA CLARA ACTUAL
+    tipo_tendencia = None
+    if actual['ema30'] > actual['ema50'] > actual['ema100']: tipo_tendencia = "BUY"
+    elif actual['ema30'] < actual['ema50'] < actual['ema100']: tipo_tendencia = "SELL"
+    
+    if not tipo_tendencia: return
 
-    # --- CONTEO DE PULLBACKS (REGLAS 2 Y 3) ---
-    # Validamos cuántas veces el precio tocó la EMA 30 sin haber tocado la EMA 50 antes de ahora
-    toques_validos = 0
-    en_zona_pullback = False
+    # 2. ESCANEO DEL HISTORIAL PARA CONTEO DE TOQUES SEPARADOS
+    # Analizamos las últimas 80 velas antes de la actual para encontrar la estructura
+    previas = df.iloc[-80:-1]
+    
+    toques_completados = 0
+    en_toque_ema30 = False
     
     for i in range(len(previas)):
         v = previas.iloc[i]
+        
         if tipo_tendencia == "BUY":
-            # Toque a EMA 30 pero no a EMA 50
-            if v['low'] <= v['ema30'] and v['low'] > v['ema50']:
-                if not en_zona_pullback:
-                    toques_validos += 1
-                    en_zona_pullback = True
-            elif v['low'] > v['ema30']: en_zona_pullback = False
-            if v['low'] <= v['ema50']: toques_validos = 0 # Invalida secuencia
-        else: # SELL
-            if v['high'] >= v['ema30'] and v['high'] < v['ema50']:
-                if not en_zona_pullback:
-                    toques_validos += 1
-                    en_zona_pullback = True
-            elif v['high'] < v['ema30']: en_zona_pullback = False
-            if v['high'] >= v['ema50']: toques_validos = 0
+            # REGLA DE ORO: Si toca la EMA 50, se invalida TODO el conteo previo
+            if v['low'] <= v['ema50']: 
+                toques_completados = 0
+                en_toque_ema30 = False
+                continue
+            
+            # Lógica de separación de toques a la EMA 30
+            if v['low'] <= v['ema30']: 
+                if not en_toque_ema30:
+                    en_toque_ema30 = True # Entra en la zona del toque
+            elif v['low'] > v['ema30']: 
+                if en_toque_ema30:
+                    toques_completados += 1 # Termina el toque, suma 1
+                    en_toque_ema30 = False
+                    
+        elif tipo_tendencia == "SELL":
+            # REGLA DE ORO: Si toca la EMA 50, se invalida TODO el conteo previo
+            if v['high'] >= v['ema50']: 
+                toques_completados = 0
+                en_toque_ema30 = False
+                continue
+            
+            # Lógica de separación de toques a la EMA 30
+            if v['high'] >= v['ema30']:
+                if not en_toque_ema30:
+                    en_toque_ema30 = True
+            elif v['high'] < v['ema30']:
+                if en_toque_ema30:
+                    toques_completados += 1
+                    en_toque_ema30 = False
 
-    # --- GATILLO INMEDIATO (3ER TOQUE) CON MARGEN 0.01% ---
+    # 3. GATILLO INMEDIATO (3ER TOQUE EXACTO EN VIVO)
     margen = actual['ema30'] * 0.0001
     disparo = False
     
-    if tipo_tendencia == "BUY" and actual['low'] <= (actual['ema30'] + margen): disparo = True
-    elif tipo_tendencia == "SELL" and actual['high'] >= (actual['ema30'] - margen): disparo = True
+    # Validamos que la vela actual esté tocando la EMA 30 (con margen) pero ESTRICTAMENTE sin tocar la 50
+    if tipo_tendencia == "BUY" and actual['low'] <= (actual['ema30'] + margen) and actual['low'] > actual['ema50']: 
+        disparo = True
+    elif tipo_tendencia == "SELL" and actual['high'] >= (actual['ema30'] - margen) and actual['high'] < actual['ema50']: 
+        disparo = True
 
-    if disparo and toques_validos == 2:
+    # Solo disparamos si el historial tiene EXACTAMENTE 2 toques previos completados
+    if disparo and toques_completados == 2:
         alerta_id = f"{clave}_{actual['epoch']}"
         if alerta_id in alertas_enviadas: return
         
-        # Filtro de seguridad B/C
+        # Filtro de seguridad (no operar spikes en contra)
         if ("Crash" in nombre and tipo_tendencia == "BUY") or ("Boom" in nombre and tipo_tendencia == "SELL"): return
 
         mapa = await obtener_mapa_confluencia(ws, api_id)
         
-        msg = (f"🎯 **SEÑAL Ema 30 y 50** 🎯\n\n"
-               f"📊 Mercado: `{nombre}`\n"
-               f"⏱️ TF Señal: `{tf_n}`\n"
-               f"🔥 Acción: **{'🔴 VENTA' if tipo_tendencia == 'SELL' else '🟢 COMPRA'}**\n"
-               f"✅ Conteo: **3er Pullback Confirmado**\n\n"
-               f"🌍 **CONFLUENCIA (1M-4H):**\n{mapa}\n"
-               f"📍 Precio: `{round(actual['ema30'], 5)}` (Toque Inmediato)")
+        msg = (f"🎯 **SEÑAL MACRO: EMA 30 y 50** 🎯\n\n"
+               f"📊 *Mercado:* `{nombre}`\n"
+               f"⏱️ *TF:* `{tf_n}`\n"
+               f"🔥 *Acción:* **{'🔴 VENTA' if tipo_tendencia == 'SELL' else '🟢 COMPRA'}**\n"
+               f"✅ *Estructura:* **3er Toque EMA 30 Confirmado**\n"
+               f"🛡️ *Filtro:* EMA 50 Intacta\n\n"
+               f"🌍 **MAPA DE ABANICOS (1H-4H-1D):**\n{mapa}\n"
+               f"📍 *Precio:* `{round(actual['ema30'], 5)}`")
         
         enviar_telegram(msg)
         alertas_enviadas[alerta_id] = True
@@ -144,12 +163,12 @@ async def loop_principal():
                     for nom, sid in SIMBOLOS_API.items():
                         for tn, tv in TFS_SCAN.items():
                             await analizar_estrategia(ws, nom, sid, tn, tv)
-                            await asyncio.sleep(0.1) # Respetar límites de API
-                    await asyncio.sleep(5)
+                            await asyncio.sleep(0.15) 
+                    await asyncio.sleep(30) # En TF altos, podemos relajar el ciclo a 30 seg
         except: await asyncio.sleep(5)
 
 async def main():
-    enviar_telegram("🚀 **Bot 'Ema 30 y 50' Online**\nEscaneando 5M-4H con Rigor Quirúrgico.\n_Portafolio Completo Activado._")
+    enviar_telegram("🚀 **Bot 'Ema 30 y 50' MACRO Online**\nEscaneando estrictamente 1H, 4H y 1D.\n_Regla de 3 Toques y Abanico Perfecto Activada._")
     await loop_principal()
 
 if __name__ == "__main__":
