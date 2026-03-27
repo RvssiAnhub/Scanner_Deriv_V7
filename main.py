@@ -2,129 +2,195 @@ import asyncio
 import websockets
 import json
 import pandas as pd
+import pandas_ta as ta
 import requests
+import io
+import time
+import matplotlib
+# Configuración headless obligatoria para Railway (Agg)
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import mplfinance as mpf
 from datetime import datetime
 
-# --- CONFIGURACIÓN DE IDENTIDAD ---
+# =============================================================
+# 1. CONFIGURACIÓN QUIRÚRGICA DE IDENTIDAD
+# =============================================================
 TOKEN = '8717928690:AAHZm1cHhBBXrl3BokW7PXSjvFPrEYJeA-E'
 CHAT_ID = '8236681412'
-APP_ID = '1089'
+APP_ID = '1089'  # Demo de Deriv
+
+# Temporalidad ÚNICA operativa
+TF_M5 = 300 
+
+# Diccionario Quirúrgico de Activos (Boom y Crash)
+MERCADOS = {
+    "Boom 1000 Index": "BOOM1000", "Boom 900 Index": "BOOM900", "Boom 600 Index": "BOOM600", "Boom 500 Index": "BOOM500", "Boom 300 Index": "BOOM300",
+    "Crash 1000 Index": "CRASH1000", "Crash 900 Index": "CRASH900", "Crash 600 Index": "CRASH600", "Crash 500 Index": "CRASH500", "Crash 300 Index": "CRASH300"
+}
 
 alertas_enviadas = {}
 
-# --- LISTADO COMPLETO DE MERCADOS ---
-SIMBOLOS_API = {
-    "Boom 1000": "BOOM1000", "Boom 900": "BOOM900", "Boom 600": "BOOM600", "Boom 500": "BOOM500", "Boom 300": "BOOM300",
-    "Crash 1000": "CRASH1000", "Crash 900": "CRASH900", "Crash 600": "CRASH600", "Crash 500": "CRASH500", "Crash 300": "CRASH300",
-    "Vol 10": "R_10", "Vol 25": "R_25", "Vol 50": "R_50", "Vol 75": "R_75", "Vol 100": "R_100",
-    "Vol 10(1s)": "1HZ10V", "Vol 25(1s)": "1HZ25V", "Vol 50(1s)": "1HZ50V", "Vol 75(1s)": "1HZ75V", "Vol 100(1s)": "1HZ100V",
-    "Jump 10": "JD10", "Jump 25": "JD25", "Jump 50": "JD50", "Jump 75": "JD75", "Jump 100": "JD100",
-    "Step": "stpRNG", "Step 200": "STEP200", "Step 500": "STEP500", "DEX 900 UP": "DEX900UP", "DEX 900 DN": "DEX900DN",
-    "XAUUSD": "frxXAUUSD", "BTCUSD": "cryBTCUSD", "US Tech 100": "OTC_US100", "Wall Street 30": "OTC_US30"
-}
-
-# --- TEMPORALIDADES (Desde 1M hasta 4H) ---
-TFS_SCAN = {"1M": 60, "5M": 300, "15M": 900, "30M": 1800, "1H": 3600, "4H": 14400}
-
-def enviar_telegram(msg):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    try: requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=5)
+# =============================================================
+# 2. MOTOR DE COMUNICACIÓN (TELEGRAM + GRÁFICOS)
+# =============================================================
+def enviar_telegram_con_foto(mensaje, bufer_foto):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+    try:
+        # Reiniciar puntero del bufer a cero para lectura
+        bufer_foto.seek(0)
+        archivos = {'photo': ('chart.png', bufer_foto, 'image/png')}
+        payload = {'chat_id': CHAT_ID, 'caption': mensaje, 'parse_mode': 'Markdown'}
+        requests.post(url, data=payload, files=archivos, timeout=10)
     except: pass
 
-async def pedir_velas(ws, api_id, tf_sec, count=150):
-    req = {"ticks_history": api_id, "count": count, "end": "latest", "style": "candles", "granularity": tf_sec}
+async def pedir_velas(ws, sid, count=200):
+    req = {"ticks_history": sid, "count": count, "end": "latest", "style": "candles", "granularity": TF_M5}
     await ws.send(json.dumps(req))
     resp = await ws.recv()
     data = json.loads(resp)
-    if "candles" in data:
+    if "candles" in data and data["candles"]:
         df = pd.DataFrame(data["candles"])
-        for c in ['close', 'high', 'low']: df[c] = df[c].astype(float)
+        for c in ['close', 'high', 'low', 'open']: df[c] = df[c].astype(float)
+        df['time'] = pd.to_datetime(df['epoch'], unit='s')
+        df.set_index('time', inplace=True)
         return df
     return None
 
-async def analizar_fibo_inteligente(ws, nombre, api_id, tf_n, tf_v):
+# =============================================================
+# 3. MOTOR GRÁFICO (RECREACIÓN DE CAPTURA EN MEMORIA Agg)
+# =============================================================
+def generar_captura_fibo_m5(df, nombre_mercado, nivel_fibo, es_boom):
+    """
+    Recrea quirúrgicamente el gráfico en la RAM para enviarlo como captura.
+    """
+    # Usamos las últimas 80 velas M5 para contexto visual claro
+    df_plot = df.iloc[-80:]
+    
+    # Color quirúrgico para la línea Fibo 23.6% solicitado
+    fibo_color = '#cc00cc' # Púrpura Prominente
+
+    # Crear la línea de Fibonacci programáticamente como un overlay
+    # ( mplfinance no dibuja líneas horizontales estáticas fácilmente,
+    #   así que creamos una lista de precios constante )
+    fibo_series = [nivel_fibo] * len(df_plot)
+    ap_fibo = mpf.make_addplot(fibo_series, color=fibo_color, width=1.5, linestyle='-', panel=0)
+
+    # Configuración de Estilo de Gráfico Profesional (Dark Theme para trading)
+    style = mpf.make_mpf_style(base_mpf_style='charles', marketcolors=mpf.make_marketcolors(up='green', down='red', inherit=True), gridcolor='gray', facecolor='#121212', edgecolor='#222222', figcolor='#121212')
+
+    # Guardar imagen directamente en la RAM (io.BytesIO) para velocidad
+    bufer = io.BytesIO()
+    
+    mpf.plot(df_plot, type='candle', style=style, addplot=ap_fibo,
+             title=f'Señal Fibo 23.6% - {nombre_mercado} (M5)',
+             ylabel='Price', volume=False, datetime_format='%H:%M', 
+             savefig=dict(fname=bufer, format='png'))
+    
+    bufer.seek(0)
+    return bufer
+
+# =============================================================
+# 4. MATRIZ LÓGICA V13.5: FRANCOTIRADOR FIBO-GRÁFICO
+# =============================================================
+async def analizar_fibo_m5(ws, nombre, sid):
     global alertas_enviadas
-    clave = f"FIBO_{nombre}_{tf_n}"
-    
-    df = await pedir_velas(ws, api_id, tf_v, 100)
-    if df is None or len(df) < 60: return
+    df = await pedir_velas(ws, sid)
+    if df is None or len(df) < 110: return
 
-    # 1. IDENTIFICAR ESTRUCTURA (Fractales de 5 velas)
-    df['pico'] = df['high'][(df['high'] == df['high'].rolling(5, center=True).max())]
-    df['valle'] = df['low'][(df['low'] == df['low'].rolling(5, center=True).min())]
-    
-    picos_validos = df.dropna(subset=['pico'])
-    valles_validos = df.dropna(subset=['valle'])
-    
-    if len(picos_validos) < 1 or len(valles_validos) < 1: return
-    
-    ultimo_pico = picos_validos.iloc[-1]
-    ultimo_valle = valles_validos.iloc[-1]
-    
-    # 2. DEFINIR DIRECCIÓN DEL MOVIMIENTO
-    # Si el valle es anterior al pico -> Movimiento Alcista (Buscamos Retroceso para COMPRAR)
-    # Si el pico es anterior al valle -> Movimiento Bajista (Buscamos Retroceso para VENDER)
-    es_alcista = ultimo_valle.name < ultimo_pico.name
-    distancia = abs(ultimo_pico['high'] - ultimo_valle['low'])
-    
-    # Nivel 61.8 Fibonacci
-    if es_alcista:
-        fibo_618 = ultimo_pico['high'] - (distancia * 0.618)
-        tipo = "🟢 COMPRA (Retroceso)"
-    else:
-        fibo_618 = ultimo_valle['low'] + (distancia * 0.618)
-        tipo = "🔴 VENTA (Retroceso)"
-
-    # 3. GATILLO: VELA CERRADA CON RECHAZO
-    cerrada = df.iloc[-2]
     actual = df.iloc[-1]
-    margen = distancia * 0.05 # Margen de "proximidad" inteligente
     
-    confirmado = False
-    if es_alcista:
-        # La vela cerrada pinchó el nivel 61.8 (o estuvo muy cerca) y cerró arriba
-        if cerrada['low'] <= (fibo_618 + margen) and cerrada['close'] > fibo_618:
-            confirmado = True
-    else:
-        # La vela cerrada pinchó el nivel 61.8 y cerró abajo
-        if cerrada['high'] >= (fibo_618 - margen) and cerrada['close'] < fibo_618:
-            confirmado = True
+    # ID de alerta por vela M5 para no duplicar
+    alerta_id = f"{sid}_{TF_M5}_{actual['epoch']}"
+    if alerta_id in alertas_enviadas: return
 
-    if confirmado:
-        alerta_id = f"{clave}_{cerrada['epoch']}"
-        if alerta_id in alertas_enviadas: return
-        
-        # Filtro de seguridad para B/C
-        if ("Crash" in nombre and "COMPRA" in tipo) or ("Boom" in nombre and "VENTA" in tipo): return
+    # 1. TRAZO DE FIBONACCI (Rigor de Imagen: 100% Top, 0% Bottom en retroceso largo)
+    # Buscamos el rango de las últimas 100 velas M5 operativo
+    rango_lookback = df.iloc[-100:-1]
+    historial_high = rango_lookback['high'].max()
+    historial_low = rango_lookback['low'].min()
+    distancia = historial_high - historial_low
+    
+    if distancia <= 0: return # Evitar flat markets
 
-        msg = (f"📐 **FIBONACCI 61.8 DETECTADO** 📐\n\n"
-               f"📊 *Mercado:* `{nombre}`\n"
-               f"⏱️ *TF:* `{tf_n}`\n"
-               f"🔥 *Acción:* **{tipo}**\n\n"
-               f"📏 *Nivel Fibo:* `{round(fibo_618, 5)}`\n"
-               f"📉 *Estructura:* {'Máximos más altos' if es_alcista else 'Mínimos más bajos'}\n"
-               f"✅ *Gatillo:* **Rechazo al Cierre Confirmado**\n\n"
-               f"📍 *Precio Actual:* `{actual['close']}`")
-        
-        enviar_telegram(msg)
+    # Nivel 23.6% exacto solicitado
+    disparo = False
+    es_boom = "Boom" in nombre
+    
+    if es_boom:
+        # Boom: Spike alcista. El high toca o cruza hacia arriba el Fibo 23.6%.
+        nivel_236 = historial_low + (distancia * 0.236)
+        # Margen técnico de proximidad del 0.01%
+        if actual['high'] >= (nivel_236 - (nivel_236 * 0.0001)): disparo = True
+    else: # Crash
+        # Crash: Spike bajista. El low toca o cruza hacia abajo el Fibo 23.6%.
+        nivel_236 = historial_high - (distancia * 0.236)
+        # Margen técnico de proximidad del 0.01%
+        if actual['low'] <= (nivel_236 + (nivel_236 * 0.0001)): disparo = True
+
+    # 2. GATILLO INMEDIATO AL TOQUE
+    if disparo:
         alertas_enviadas[alerta_id] = True
+        
+        # MEDICIÓN TÉCNICA (Informativa, NO interfiere en la señal)
+        # Stochastic (14,3,3) y CCI (14) basado minuciosamente en imagen.
+        stoch_df = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3, smooth_k=3)
+        val_k = stoch_df.iloc[-1]['STOCHk_14_3_3']
+        val_d = stoch_df.iloc[-1]['STOCHd_14_3_3']
+        
+        val_cci = ta.cci(df['high'], df['low'], df['close'], length=14).iloc[-1]
+        
+        estado = ""
+        if es_boom:
+            # Sobreventa extrema para Booms.
+            estado = "🔴 SOBREVENTA DETECTADA" if (val_k < 20 or val_cci < -100) else "⚪ Zona Neutra"
+        else:
+            # Sobrecompra extrema para Crashes.
+            estado = "🟢 SOBRECOMPRA DETECTADA" if (val_k > 80 or val_cci > 100) else "⚪ Zona Neutra"
+
+        # 3. GENERACIÓN DE CAPTURA PROGRAMÁTICA
+        chart_buf = generar_captura_fibo_m5(df, nombre, nivel_236, es_boom)
+        
+        # MENSAJE TÉCNICO DETALLADO SOLICITADO
+        msg = (f"🎯 **ALERTA FIBO 23.6% - M5** 🎯\n\n"
+               f"📊 *Mercado:* `{nombre}` | TF Señal: `M5`\n"
+               f"⚡ *Acción:* **{'🟢 COMPRA' if es_boom else '🔴 VENTA'} (Spike Detectado)**\n\n"
+               f"📏 **Nivel Fibonacci 23.6%:** `{round(nivel_236, 5)}`\n"
+               f"📍 **Precio Spike Actual:** `{round(actual['high'] if es_boom else actual['low'], 5)}`\n"
+               f"───────────────────\n"
+               f"🔍 **INFO TÉCNICA (Referencia):**\n"
+               f"📢 Estado Visual: `{estado}`\n"
+               f"📉 Stochastic (14,3,3): `K:{round(val_k,2)} D:{round(val_d,2)}`\n"
+               f"📈 CCI (14): `{round(val_cci,2)}`\n"
+               f"───────────────────\n"
+               f"⏰ _Scan - {datetime.now().strftime('%H:%M:%S UTC')}_")
+        
+        enviar_telegram_con_foto(msg, chart_buf)
+        # Cerrar bufer quirúrgicamente para liberar RAM inmediatamente
+        chart_buf.close()
 
 async def loop_principal():
-    uri = f"wss://ws.binaryws.com/websockets/v3?app_id={APP_ID}"
+    uri = "wss://ws.binaryws. v3?app_id=" + APP_ID
     while True:
         try:
             async with websockets.connect(uri) as ws:
                 while True:
-                    for nom, sid in SIMBOLOS_API.items():
-                        for tn, tv in TFS_SCAN.items():
-                            await analizar_fibo_inteligente(ws, nom, sid, tn, tv)
-                            await asyncio.sleep(0.1) # Rapidez para 1M
-                    await asyncio.sleep(10)
-        except: await asyncio.sleep(5)
-
-async def main():
-    enviar_telegram("📐 **Bot Fibo 61.8 V12.0 Online**\nEscaneando desde 1M hasta 4H.\n_Estructura y Rechazo al Cierre Activos._")
-    await loop_principal()
+                    for nom, sid in MERCADOS.items():
+                        await analizar_fibo_m5(ws, nom, sid)
+                        # Delay quirúrgico asíncrono de 0.2s para no saturar API Deriv
+                        await asyncio.sleep(0.2) 
+                    # Ciclo rápido en M5
+                    await asyncio.sleep(15) 
+        except Exception as e:
+            # Reintentar conexión quirúrgicamente tras error
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Mensaje de confirmación inmediata solicitado
+    enviar_telegram_con_foto("📐 **Scanner Fibo 23.6% M5 Online (con Gráficos)**\nAnalizando retrocesos largos. La señal se envía al toque con captura visual técnica.", None if 'chart_buf' not in locals() else chart_buf)
+    # Reemplazo por un simple mensaje de texto inicial para el main, ya que no hay chart_buf
+    url_text = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    requests.post(url_text, json={"chat_id": CHAT_ID, "text": "📐 **Scanner Fibo 23.6% M5 Online (con Gráficos)**\n_Matriz asíncrona cargando..._", "parse_mode": "Markdown"})
+    
+    # Arrancar el motor asíncrono quirúrgicamente
+    asyncio.run(loop_principal())
