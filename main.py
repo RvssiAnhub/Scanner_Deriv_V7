@@ -48,23 +48,18 @@ async def obtener_tendencia_pa(ws, sid, tf_sec):
     df = await pedir_velas(ws, sid, tf_sec, count=4)
     if df is None or len(df) < 3: return "⚪"
     
-    # Analizamos las últimas 2 velas cerradas para ver estructura (HH/LL)
     c1 = df.iloc[-3]
     c2 = df.iloc[-2]
     
-    # Lógica de Altos más Altos y Bajos más Bajos
-    if c2['high'] > c1['high'] and c2['low'] > c1['low']:
-        return "🟢" # Tendencia Alcista Confirmada
-    elif c2['high'] < c1['high'] and c2['low'] < c1['low']:
-        return "🔴" # Tendencia Bajista Confirmada
+    if c2['high'] > c1['high'] and c2['low'] > c1['low']: return "🟢"
+    elif c2['high'] < c1['high'] and c2['low'] < c1['low']: return "🔴"
     else:
-        # Si es un inside bar, usamos el cuerpo de la vela actual
         if c2['close'] > c2['open']: return "🟢"
         elif c2['close'] < c2['open']: return "🔴"
-        return "⚪" # Consolidación absoluta
+        return "⚪"
 
 # =============================================================
-# 4. NÚCLEO ALGORÍTMICO: GAP + CONFLUENCIA
+# 4. NÚCLEO ALGORÍTMICO: GAP + CONFLUENCIA ESTRICTA
 # =============================================================
 async def analizar_gap_mtf(ws, nombre, sid):
     global alertas_enviadas
@@ -79,7 +74,6 @@ async def analizar_gap_mtf(ws, nombre, sid):
     alerta_id = f"{sid}_GAP_{c_conf['epoch']}"
     if alerta_id in alertas_enviadas: return
 
-    # Variables de estado
     es_base_verde = c_base['close'] > c_base['open']
     es_gap_verde = c_gap['close'] > c_gap['open']
     es_conf_verde = c_conf['close'] > c_conf['open']
@@ -106,22 +100,31 @@ async def analizar_gap_mtf(ws, nombre, sid):
                 señal = "VENTA"
                 color_señal = "🔴"
 
-    # SI HAY SEÑAL -> ACTIVAR ESCÁNER MACRO (LAZY FETCH)
+    # SI HAY SEÑAL -> ACTIVAR ESCÁNER MACRO
     if señal:
-        # Consultamos la Acción del Precio en TFs superiores
         t_5m = await obtener_tendencia_pa(ws, sid, TFS["5M"])
         t_15m = await obtener_tendencia_pa(ws, sid, TFS["15M"])
         t_30m = await obtener_tendencia_pa(ws, sid, TFS["30M"])
         t_1h = await obtener_tendencia_pa(ws, sid, TFS["1H"])
         t_4h = await obtener_tendencia_pa(ws, sid, TFS["4H"])
 
-        # Filtro de Seguridad PRO: Requerimos que al menos 1H o 4H estén a favor de la señal
-        # Si disparamos contra la tendencia macro, es suicidio financiero.
-        macro_alineada = False
-        if señal == "COMPRA" and (t_1h == "🟢" or t_4h == "🟢"): macro_alineada = True
-        if señal == "VENTA" and (t_1h == "🔴" or t_4h == "🔴"): macro_alineada = True
+        # =========================================================
+        # FILTRO PRO: PATRÓN ESTRICTO BASADO EN IMAGEN
+        # =========================================================
+        patron_perfecto = False
+        
+        if señal == "COMPRA":
+            # Exige que 5M y 15M estén rojos, mientras 30M, 1H y 4H estén verdes
+            if t_5m == "🔴" and t_15m == "🔴" and t_30m == "🟢" and t_1h == "🟢" and t_4h == "🟢":
+                patron_perfecto = True
+                
+        elif señal == "VENTA":
+            # Exige que 5M y 15M estén verdes, mientras 30M, 1H y 4H estén rojos
+            if t_5m == "🟢" and t_15m == "🟢" and t_30m == "🔴" and t_1h == "🔴" and t_4h == "🔴":
+                patron_perfecto = True
 
-        if macro_alineada:
+        # Solo envía si cumple el patrón exacto
+        if patron_perfecto:
             alertas_enviadas[alerta_id] = True
             
             msg = (f"🚀 **PATRÓN GAP + MTF CONFIRMADO** 🚀\n\n"
@@ -136,7 +139,7 @@ async def analizar_gap_mtf(ws, nombre, sid):
                    f"• `1H:`  {t_1h}\n"
                    f"• `4H:`  {t_4h}\n"
                    f"───────────────────\n"
-                   f"✅ _Filtro Macro 1H/4H Superado_")
+                   f"✅ _Patrón Estricto Superado_")
             
             enviar_telegram(msg)
 
@@ -157,5 +160,5 @@ async def loop_principal():
             await asyncio.sleep(2) 
 
 if __name__ == "__main__":
-    enviar_telegram("🛡️ **Motor PRO GAP + Confluencia (V2.0)**\n_Matriz de Acción del Precio ONLINE._\nFiltrando señales contra-tendencia en 1H y 4H.")
+    enviar_telegram("🛡️ **Motor PRO GAP + Confluencia (V2.1)**\n_Modo Sniper Activado._\nIgnorando todo excepto el Patrón Estricto de Pullback (Micro/Macro a favor, Intermedio en contra).")
     asyncio.run(loop_principal())
