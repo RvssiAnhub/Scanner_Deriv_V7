@@ -19,8 +19,7 @@ MERCADOS_FVG = {
     "Step": "stpRNG", "XAUUSD": "frxXAUUSD", "BTCUSD": "cryBTCUSD", "US Tech 100": "OTC_US100"
 }
 
-# CONFIGURACIÓN DE TEMPORALIDADES
-TF_GATILLO = "5M"  # Cambia a "15M" si prefieres operaciones más lentas y seguras
+TF_GATILLO = "5M"  
 TFS = {"1M": 60, "5M": 300, "15M": 900, "30M": 1800, "1H": 3600, "4H": 14400}
 alertas_enviadas = {}
 
@@ -52,54 +51,60 @@ async def obtener_tendencia_pa(ws, sid, tf_sec):
     else: return "🟢" if c2['close'] > c2['open'] else "🔴"
 
 # =============================================================
-# 3. LÓGICA DE DETECCIÓN Y MITIGACIÓN (GATILLO INTRADÍA)
+# 3. LÓGICA DE DETECCIÓN, MITIGACIÓN Y ANTI-SPAM
 # =============================================================
 async def analizar_fvg_intraday(ws, nombre, sid):
     global alertas_enviadas
-    # Analizamos el TF de Gatillo elegido (5M o 15M)
     df = await pedir_velas(ws, sid, TFS[TF_GATILLO], count=20)
     if df is None or len(df) < 10: return
 
     vela_actual = df.iloc[-1]
     vela_previa = df.iloc[-2]
     
-    alerta_id = f"{sid}_FVG_{TF_GATILLO}_{vela_actual['epoch']}"
-    if alerta_id in alertas_enviadas: return
+    señal, color_señal, fvg_top, fvg_bot, precio_entrada = None, "", 0, 0, 0
+    alerta_id = ""
 
-    señal, color_señal, fvg_top, fvg_bot = None, "", 0, 0
-
-    # Escaneo de historial reciente para buscar el FVG abierto
     for i in range(2, len(df) - 2):
         v1, v3 = df.iloc[i-2], df.iloc[i]
         
         # 🟢 FVG ALCISTA Detectado
         if v1['high'] < v3['low']:
             top, bot = v3['low'], v1['high']
-            # Verificamos si la vela previa cerró confirmando el rebote en la zona
+            id_temporal = f"{sid}_COMPRA_{top}_{bot}" # ID Único basado en las coordenadas del FVG
+            
+            if id_temporal in alertas_enviadas:
+                continue # Si ya enviamos este FVG, lo saltamos y evitamos repetir
+                
             if vela_previa['low'] <= top and vela_previa['close'] > bot:
-                if vela_previa['close'] > vela_previa['open']: # Vela Verde de rechazo
+                if vela_previa['close'] > vela_previa['open']: 
                     señal, color_señal, fvg_top, fvg_bot = "COMPRA", "🟢", top, bot
+                    precio_entrada = top # Entrada sugerida en el borde superior del FVG
+                    alerta_id = id_temporal
                     break
 
         # 🔴 FVG BAJISTA Detectado
         elif v1['low'] > v3['high']:
             top, bot = v1['low'], v3['high']
-            # Verificamos si la vela previa cerró confirmando el rechazo bajista
+            id_temporal = f"{sid}_VENTA_{top}_{bot}" # ID Único basado en las coordenadas del FVG
+            
+            if id_temporal in alertas_enviadas:
+                continue
+                
             if vela_previa['high'] >= bot and vela_previa['close'] < top:
-                if vela_previa['close'] < vela_previa['open']: # Vela Roja de rechazo
+                if vela_previa['close'] < vela_previa['open']: 
                     señal, color_señal, fvg_top, fvg_bot = "VENTA", "🔴", top, bot
+                    precio_entrada = bot # Entrada sugerida en el borde inferior del FVG
+                    alerta_id = id_temporal
                     break
 
     # =========================================================
     # 4. VALIDACIÓN ESTRUCTURAL (MACRO)
     # =========================================================
     if señal:
-        # Consultamos las tendencias mayores para asegurar alineación
         t_30m = await obtener_tendencia_pa(ws, sid, TFS["30M"])
         t_1h = await obtener_tendencia_pa(ws, sid, TFS["1H"])
         t_4h = await obtener_tendencia_pa(ws, sid, TFS["4H"])
 
-        # Solo enviamos si el bloque Macro (30M, 1H, 4H) coincide
         alineado = False
         if señal == "COMPRA" and t_30m == "🟢" and t_1h == "🟢" and t_4h == "🟢":
             alineado = True
@@ -111,7 +116,8 @@ async def analizar_fvg_intraday(ws, nombre, sid):
             msg = (f"🎯 **FVG INTRADÍA DETECTADO ({TF_GATILLO})**\n\n"
                    f"📊 *Mercado:* `{nombre}`\n"
                    f"🔥 *Acción:* **{color_señal} {señal}**\n"
-                   f"📍 *Precio de Mitigación:* `{round(vela_actual['open'], 5)}`\n"
+                   f"🛑 *Posible Entrada:* `{round(precio_entrada, 5)}`\n"
+                   f"📍 *Precio Actual:* `{round(vela_actual['open'], 5)}`\n"
                    f"📦 *Zona de Ineficiencia:* `{round(fvg_bot, 5)} - {round(fvg_top, 5)}`\n\n"
                    f"🌎 **CONFLUENCIA ESTRUCTURAL:**\n"
                    f"• `30M:` {t_30m} ✅\n"
@@ -129,10 +135,10 @@ async def loop_principal():
                 while True:
                     for nom, sid in MERCADOS_FVG.items():
                         await analizar_fvg_intraday(ws, nom, sid)
-                        await asyncio.sleep(0.1) # Un poco más de tiempo entre mercados
-                    await asyncio.sleep(5) # Revisamos cada 5 segundos
+                        await asyncio.sleep(0.1) 
+                    await asyncio.sleep(5) 
         except: await asyncio.sleep(2)
 
 if __name__ == "__main__":
-    enviar_telegram(f"🛡️ **V3.1 Intraday Sniper Online**\n_Gatillo configurado en {TF_GATILLO}._")
+    enviar_telegram(f"🛡️ **V3.2 Intraday Sniper Online**\n_Filtro Anti-Spam Activado._")
     asyncio.run(loop_principal())
