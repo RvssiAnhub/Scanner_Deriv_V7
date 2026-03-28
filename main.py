@@ -128,4 +128,4 @@ async def loop_principal():
 
 if __name__ == "__main__":
     enviar_telegram("🛡️ **Sniper GAP V2.2 Online**\n_Filtro Estricto: 30M, 1H y 4H obligatorios._")
-    asyncio.run(loop_principal())1
+    asyncio.run(loop_principal())
