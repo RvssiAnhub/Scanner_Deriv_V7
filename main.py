@@ -6,31 +6,33 @@ import requests
 from datetime import datetime
 
 # =============================================================
-# 1. CONFIGURACIÓN DE IDENTIDAD
+# 1. CONFIGURACIÓN SNIPER INTRADÍA
 # =============================================================
 TOKEN = '8717928690:AAHZm1cHhBBXrl3BokW7PXSjvFPrEYJeA-E'
 CHAT_ID = '8236681412'
 APP_ID = '1089'  
 
-MERCADOS_GAP = {
+MERCADOS_FVG = {
     "Vol 10": "R_10", "Vol 25": "R_25", "Vol 50": "R_50", "Vol 75": "R_75", "Vol 100": "R_100",
     "Vol 10(1s)": "1HZ10V", "Vol 25(1s)": "1HZ25V", "Vol 50(1s)": "1HZ50V", "Vol 75(1s)": "1HZ75V", "Vol 100(1s)": "1HZ100V",
     "Jump 10": "JD10", "Jump 25": "JD25", "Jump 50": "JD50", "Jump 75": "JD75", "Jump 100": "JD100",
     "Step": "stpRNG", "XAUUSD": "frxXAUUSD", "BTCUSD": "cryBTCUSD", "US Tech 100": "OTC_US100"
 }
 
+# CONFIGURACIÓN DE TEMPORALIDADES
+TF_GATILLO = "5M"  # Cambia a "15M" si prefieres operaciones más lentas y seguras
 TFS = {"1M": 60, "5M": 300, "15M": 900, "30M": 1800, "1H": 3600, "4H": 14400}
 alertas_enviadas = {}
 
 # =============================================================
-# 2. MOTOR DE DATOS Y TENDENCIA
+# 2. FUNCIONES DE APOYO
 # =============================================================
 def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     try: requests.post(url, json={"chat_id": CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}, timeout=5)
     except: pass
 
-async def pedir_velas(ws, sid, tf_sec, count=10):
+async def pedir_velas(ws, sid, tf_sec, count=15):
     req = {"ticks_history": sid, "count": count, "end": "latest", "style": "candles", "granularity": tf_sec}
     await ws.send(json.dumps(req))
     resp = await ws.recv()
@@ -45,52 +47,59 @@ async def obtener_tendencia_pa(ws, sid, tf_sec):
     df = await pedir_velas(ws, sid, tf_sec, count=4)
     if df is None or len(df) < 3: return "⚪"
     c1, c2 = df.iloc[-3], df.iloc[-2]
-    # Lógica de máximos y mínimos (Price Action)
     if c2['high'] > c1['high'] and c2['low'] > c1['low']: return "🟢"
     elif c2['high'] < c1['high'] and c2['low'] < c1['low']: return "🔴"
     else: return "🟢" if c2['close'] > c2['open'] else "🔴"
 
 # =============================================================
-# 3. NÚCLEO ALGORÍTMICO: GAP + CONFLUENCIA MACRO OBLIGATORIA
+# 3. LÓGICA DE DETECCIÓN Y MITIGACIÓN (GATILLO INTRADÍA)
 # =============================================================
-async def analizar_gap_mtf(ws, nombre, sid):
+async def analizar_fvg_intraday(ws, nombre, sid):
     global alertas_enviadas
-    df_m1 = await pedir_velas(ws, sid, TFS["1M"], count=5)
-    if df_m1 is None or len(df_m1) < 4: return
+    # Analizamos el TF de Gatillo elegido (5M o 15M)
+    df = await pedir_velas(ws, sid, TFS[TF_GATILLO], count=20)
+    if df is None or len(df) < 10: return
 
-    c_base, c_gap, c_conf, c_actual = df_m1.iloc[-4], df_m1.iloc[-3], df_m1.iloc[-2], df_m1.iloc[-1]
-    alerta_id = f"{sid}_GAP_{c_conf['epoch']}"
+    vela_actual = df.iloc[-1]
+    vela_previa = df.iloc[-2]
+    
+    alerta_id = f"{sid}_FVG_{TF_GATILLO}_{vela_actual['epoch']}"
     if alerta_id in alertas_enviadas: return
 
-    # Lógica de colores para M1
-    es_compra = (c_base['close'] > c_base['open']) and (c_gap['close'] > c_gap['open']) and (c_conf['close'] > c_conf['open'])
-    es_venta = (c_base['close'] < c_base['open']) and (c_gap['close'] < c_gap['open']) and (c_conf['close'] < c_conf['open'])
+    señal, color_señal, fvg_top, fvg_bot = None, "", 0, 0
 
-    señal = None
-    color_m1 = ""
+    # Escaneo de historial reciente para buscar el FVG abierto
+    for i in range(2, len(df) - 2):
+        v1, v3 = df.iloc[i-2], df.iloc[i]
+        
+        # 🟢 FVG ALCISTA Detectado
+        if v1['high'] < v3['low']:
+            top, bot = v3['low'], v1['high']
+            # Verificamos si la vela previa cerró confirmando el rebote en la zona
+            if vela_previa['low'] <= top and vela_previa['close'] > bot:
+                if vela_previa['close'] > vela_previa['open']: # Vela Verde de rechazo
+                    señal, color_señal, fvg_top, fvg_bot = "COMPRA", "🟢", top, bot
+                    break
 
-    # Detección de GAP según estrategia (1M)
-    if es_compra:
-        if (c_gap['open'] - c_base['close']) >= (c_base['close'] * 0.00005):
-            if c_conf['low'] >= c_gap['low']: # Regla de Oro 2da vela
-                señal = "COMPRA"
-                color_m1 = "🟢"
+        # 🔴 FVG BAJISTA Detectado
+        elif v1['low'] > v3['high']:
+            top, bot = v1['low'], v3['high']
+            # Verificamos si la vela previa cerró confirmando el rechazo bajista
+            if vela_previa['high'] >= bot and vela_previa['close'] < top:
+                if vela_previa['close'] < vela_previa['open']: # Vela Roja de rechazo
+                    señal, color_señal, fvg_top, fvg_bot = "VENTA", "🔴", top, bot
+                    break
 
-    elif es_venta:
-        if (c_base['close'] - c_gap['open']) >= (c_base['close'] * 0.00005):
-            if c_conf['high'] <= c_gap['high']: # Regla de Oro 2da vela
-                señal = "VENTA"
-                color_m1 = "🔴"
-
+    # =========================================================
+    # 4. VALIDACIÓN ESTRUCTURAL (MACRO)
+    # =========================================================
     if señal:
-        # Escaneo de tendencias macro
-        t_5m = await obtener_tendencia_pa(ws, sid, TFS["5M"])
-        t_15m = await obtener_tendencia_pa(ws, sid, TFS["15M"])
+        # Consultamos las tendencias mayores para asegurar alineación
         t_30m = await obtener_tendencia_pa(ws, sid, TFS["30M"])
         t_1h = await obtener_tendencia_pa(ws, sid, TFS["1H"])
         t_4h = await obtener_tendencia_pa(ws, sid, TFS["4H"])
 
-        # FILTRO DE ALINEACIÓN OBLIGATORIA (30M, 1H, 4H)
+        # Solo enviamos si el bloque Macro (30M, 1H, 4H) coincide
         alineado = False
         if señal == "COMPRA" and t_30m == "🟢" and t_1h == "🟢" and t_4h == "🟢":
             alineado = True
@@ -99,19 +108,17 @@ async def analizar_gap_mtf(ws, nombre, sid):
 
         if alineado:
             alertas_enviadas[alerta_id] = True
-            msg = (f"🚀 **PATRÓN GAP + MACRO ALINEADO** 🚀\n\n"
-                   f"📊 *Mercado:* `{nombre}` | TF: `1M`\n"
-                   f"🎯 *Acción:* **{color_m1} {señal}**\n"
-                   f"📍 *Precio:* `{round(c_actual['open'], 5)}`\n\n"
-                   f"🌎 **ESTADO MULTI-TF:**\n"
-                   f"• `1M:`  {color_m1} (Gatillo)\n"
-                   f"• `5M:`  {t_5m} (Ignorado)\n"
-                   f"• `15M:` {t_15m} (Ignorado)\n"
+            msg = (f"🎯 **FVG INTRADÍA DETECTADO ({TF_GATILLO})**\n\n"
+                   f"📊 *Mercado:* `{nombre}`\n"
+                   f"🔥 *Acción:* **{color_señal} {señal}**\n"
+                   f"📍 *Precio de Mitigación:* `{round(vela_actual['open'], 5)}`\n"
+                   f"📦 *Zona de Ineficiencia:* `{round(fvg_bot, 5)} - {round(fvg_top, 5)}`\n\n"
+                   f"🌎 **CONFLUENCIA ESTRUCTURAL:**\n"
                    f"• `30M:` {t_30m} ✅\n"
                    f"• `1H:`  {t_1h} ✅\n"
                    f"• `4H:`  {t_4h} ✅\n"
                    f"───────────────────\n"
-                   f"💎 _Tendencia Institucional Confirmada_")
+                   f"💎 _Análisis profesional de mitigación completado._")
             enviar_telegram(msg)
 
 async def loop_principal():
@@ -120,12 +127,12 @@ async def loop_principal():
         try:
             async with websockets.connect(uri) as ws:
                 while True:
-                    for nom, sid in MERCADOS_GAP.items():
-                        await analizar_gap_mtf(ws, nom, sid)
-                        await asyncio.sleep(0.05)
-                    await asyncio.sleep(2)
+                    for nom, sid in MERCADOS_FVG.items():
+                        await analizar_fvg_intraday(ws, nom, sid)
+                        await asyncio.sleep(0.1) # Un poco más de tiempo entre mercados
+                    await asyncio.sleep(5) # Revisamos cada 5 segundos
         except: await asyncio.sleep(2)
 
 if __name__ == "__main__":
-    enviar_telegram("🛡️ **Sniper GAP V2.2 Online**\n_Filtro Estricto: 30M, 1H y 4H obligatorios._")
+    enviar_telegram(f"🛡️ **V3.1 Intraday Sniper Online**\n_Gatillo configurado en {TF_GATILLO}._")
     asyncio.run(loop_principal())
