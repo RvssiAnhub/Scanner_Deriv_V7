@@ -16,7 +16,10 @@ MERCADOS_FVG = {
     "Vol 10": "R_10", "Vol 25": "R_25", "Vol 50": "R_50", "Vol 75": "R_75", "Vol 100": "R_100",
     "Vol 10(1s)": "1HZ10V", "Vol 25(1s)": "1HZ25V", "Vol 50(1s)": "1HZ50V", "Vol 75(1s)": "1HZ75V", "Vol 100(1s)": "1HZ100V",
     "Jump 10": "JD10", "Jump 25": "JD25", "Jump 50": "JD50", "Jump 75": "JD75", "Jump 100": "JD100",
-    "Step": "stpRNG", "XAUUSD": "frxXAUUSD", "BTCUSD": "cryBTCUSD", "US Tech 100": "OTC_US100"
+    "Step": "stpRNG", "Step 200": "stpRNG200", "Step 500": "stpRNG500",
+    "Boom 1000": "BOOM1000", "Boom 900": "BOOM900", "Boom 600": "BOOM600", "Boom 500": "BOOM500", "Boom 300": "BOOM300",
+    "Crash 1000": "CRASH1000", "Crash 900": "CRASH900", "Crash 600": "CRASH600", "Crash 500": "CRASH500", "Crash 300": "CRASH300",
+    "XAUUSD": "frxXAUUSD", "BTCUSD": "cryBTCUSD", "US Tech 100": "OTC_US100"
 }
 
 TF_GATILLO = "5M"  
