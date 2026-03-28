@@ -73,22 +73,22 @@ async def analizar_fvg_intraday(ws, nombre, sid):
         # 🟢 FVG ALCISTA Detectado
         if v1['high'] < v3['low']:
             top, bot = v3['low'], v1['high']
-            id_temporal = f"{sid}_COMPRA_{top}_{bot}" # ID Único basado en las coordenadas del FVG
+            id_temporal = f"{sid}_COMPRA_{top}_{bot}" 
             
             if id_temporal in alertas_enviadas:
-                continue # Si ya enviamos este FVG, lo saltamos y evitamos repetir
+                continue 
                 
             if vela_previa['low'] <= top and vela_previa['close'] > bot:
                 if vela_previa['close'] > vela_previa['open']: 
                     señal, color_señal, fvg_top, fvg_bot = "COMPRA", "🟢", top, bot
-                    precio_entrada = top # Entrada sugerida en el borde superior del FVG
+                    precio_entrada = top 
                     alerta_id = id_temporal
                     break
 
         # 🔴 FVG BAJISTA Detectado
         elif v1['low'] > v3['high']:
             top, bot = v1['low'], v3['high']
-            id_temporal = f"{sid}_VENTA_{top}_{bot}" # ID Único basado en las coordenadas del FVG
+            id_temporal = f"{sid}_VENTA_{top}_{bot}" 
             
             if id_temporal in alertas_enviadas:
                 continue
@@ -96,7 +96,7 @@ async def analizar_fvg_intraday(ws, nombre, sid):
             if vela_previa['high'] >= bot and vela_previa['close'] < top:
                 if vela_previa['close'] < vela_previa['open']: 
                     señal, color_señal, fvg_top, fvg_bot = "VENTA", "🔴", top, bot
-                    precio_entrada = bot # Entrada sugerida en el borde inferior del FVG
+                    precio_entrada = bot 
                     alerta_id = id_temporal
                     break
 
@@ -104,6 +104,13 @@ async def analizar_fvg_intraday(ws, nombre, sid):
     # 4. VALIDACIÓN ESTRUCTURAL (MACRO)
     # =========================================================
     if señal:
+        # --- FILTRO DIRECCIONAL PARA BOOM Y CRASH ---
+        if "Boom" in nombre and señal == "VENTA":
+            return # Aborta si detecta venta en Boom
+        if "Crash" in nombre and señal == "COMPRA":
+            return # Aborta si detecta compra en Crash
+        # --------------------------------------------
+
         t_30m = await obtener_tendencia_pa(ws, sid, TFS["30M"])
         t_1h = await obtener_tendencia_pa(ws, sid, TFS["1H"])
         t_4h = await obtener_tendencia_pa(ws, sid, TFS["4H"])
@@ -143,5 +150,5 @@ async def loop_principal():
         except: await asyncio.sleep(2)
 
 if __name__ == "__main__":
-    enviar_telegram(f"🛡️ **V3.2 Intraday Sniper Online**\n_Filtro Anti-Spam Activado._")
+    enviar_telegram(f"🛡️ **V3.2 Intraday Sniper Online**\n_Filtro Anti-Spam y Seguro Spike Activado._")
     asyncio.run(loop_principal())
